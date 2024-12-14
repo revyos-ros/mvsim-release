@@ -2,6 +2,95 @@
 Changelog for package mvsim
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+0.12.1 (2024-12-04)
+-------------------
+* Merge pull request `#58 <https://github.com/MRPT/mvsim/issues/58>`_ from MichaelGrupp/fix-navsatfix-ros1
+  Fix ROS1 build
+* Merge pull request `#59 <https://github.com/MRPT/mvsim/issues/59>`_ from MichaelGrupp/fix-segfault
+  Fix segfault caused by uninitialized publisher
+* Fix segfault caused by uninitialized publisher
+  Crash occurs for example when running the demo_warehouse.launch with
+  ROS 1. Debug build + gdb revealed that the issue was this publisher.
+* Contributors: Jose Luis Blanco-Claraco, Michael Grupp
+
+0.12.0 (2024-12-04)
+-------------------
+* DEM: add optional kernel filtering
+* document GPS sensors
+* Add new <marker> tag
+* Update README.md: Add link to ROSCon video
+* Fix loss of precision in box2d due to float in case of UTM coordinates
+* Merge pull request `#57 <https://github.com/MRPT/mvsim/issues/57>`_ from MRPT/wip/support_utm_coords
+  Support UTM coords
+* Elevation queries: port float->double
+* Support world-wise coordinates offset for rendering
+* Elevation map: new input mode from DEM XYZRGB files
+* Moved Python and C++ tutorials directory to root level
+* Logger: show active logging status in GUI; better reordering of csv columns
+* Fix doxygen docs generation on RTD
+* ROS node: new argument "force_publish_vehicle_namespace"
+* Allow vehicle names to be parameterizable via expressions, environment variables, etc.
+* FIX: Wrong sensor pose rendering
+* Elevation map demo world: add GNSS sensor
+* LiDAR3D sensor: generate per-point timestamp (constants)
+* FIX: cmake export dependency on mrpt-topography
+* ROS node: publish NavSatFix messages
+* Add missing build dependency
+* Fix clang-format
+* Add new sensor: GNSS (GPS) devices
+* IMU C++ class: fix interface to replace the sensor with the GUI
+* imu.sensor.xml: Add a simple 3D model to visualize the sensor
+* Contributors: Jose Luis Blanco-Claraco
+
+0.11.2 (2024-10-20)
+-------------------
+* Fix FTBFS in ROS 1
+* Contributors: Jose Luis Blanco-Claraco
+
+0.11.1 (2024-10-17)
+-------------------
+* Great performance improvement for worlds with many (>100) block objects.
+  Terrain elevation query function has been refactored to use a 2D hash-map instead of naively visiting all objects.
+* ROS node: use correct QoS for gridmap publication, and ensure it is published only once.
+* ROS 2: turtlebot demo: Fix RViz wrong camera topic name
+* ROS 2 1robot demo: update rviz config
+* ROS 2: Use correct QoS for (possibly namespaced) /tf & /tf_static
+* FIX: demo_1robot ROS2 launch error (wrong order in listing ros launch arguments)
+* version.h
+* Contributors: Jose Luis Blanco-Claraco
+
+0.11.0 (2024-10-12)
+-------------------
+* docs: add new demo world
+* Add ros2 launch for new demo world
+* Colission fixed for elevation meshes at high speed
+* New world demo: road circuit
+* ElevationMap: Add option for rotating texture images
+* Implement cylinder ground bumps
+* demo_1robot: add launch arguments headless and use_rviz
+* HorizontalPlane: also supports elevation API now
+* Implement moving vehicles over ramps and blocks in general
+* Remove #if for older mrpt versions
+* FIXBUG: 2D LaserScanner sensor wouldn't render custom visuals correctly if robot moves in 3D
+* Jackal robot model: Add new param "lidar2d_raytrace"
+* Finish texture partition of split meshes
+* Fix correct query point for determining elevation offset for blocks and vehicles
+* Automatically correct elevation of objects initialized on elevation maps
+* Move vehicle tilt calculation from ElevationMesh outside to World so it works with many other object types
+* source files: split simulation-related stuff into a new World_simul.cpp
+* CMake: prefer explicit file lists instead of file(GLOB ...)
+* Add getElevationAt() virtual interface for all Simulable objects
+* Update README.md
+* Fix headless ros param name in demo params YAML file
+* Use new assimp feature to improve rendering of transparent meshes
+* elevation map demo: add trees
+* docs: add link to 3D objects repository
+* fix build for ROS 1
+* ROS: publish camera_info too for each camera sensor
+  **Backwards-incompatible change**: Camera topics now are named as: `veh/camera_name/image_raw`
+  instead of `veh/camera_name`, so the corresponding `camera_info` exists within its same namespace: `veh/camera_name/camera_info`.
+* Contributors: Jose Luis Blanco-Claraco
+
 0.10.0 (2024-08-28)
 -------------------
 * Depend on new mrpt_lib packages (deprecate mrpt2)

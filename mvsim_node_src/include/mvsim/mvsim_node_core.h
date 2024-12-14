@@ -12,6 +12,7 @@
 #include <mrpt/core/WorkerThreadsPool.h>
 #include <mrpt/obs/CObservation.h>
 #include <mrpt/obs/CObservation3DRangeScan.h>
+#include <mrpt/obs/CObservationGPS.h>
 #include <mrpt/obs/CObservationIMU.h>
 #include <mrpt/obs/CObservationPointCloud.h>
 #include <mrpt/system/CTicTac.h>
@@ -19,8 +20,6 @@
 #include <mvsim/Comms/Server.h>
 #include <mvsim/World.h>
 #include <tf2/LinearMath/Transform.h>
-#include <tf2_ros/static_transform_broadcaster.h>
-#include <tf2_ros/transform_broadcaster.h>
 
 #include <atomic>
 #include <thread>
@@ -38,7 +37,9 @@
 #include <ros/ros.h>
 #include <ros/time.h>
 #include <rosgraph_msgs/Clock.h>
+#include <sensor_msgs/CameraInfo.h>
 #include <std_msgs/Bool.h>
+#include <tf2_msgs/TFMessage.h>
 #include <visualization_msgs/MarkerArray.h>
 
 // usings:
@@ -56,6 +57,7 @@ using Msg_MapMetaData = nav_msgs::MapMetaData;
 using Msg_Bool = std_msgs::Bool;
 using Msg_TFMessage = tf2_msgs::TFMessage;
 using Msg_MarkerArray = visualization_msgs::MarkerArray;
+using Msg_CameraInfo = sensor_msgs::CameraInfo;
 #else
 #include <geometry_msgs/msg/polygon.hpp>
 #include <geometry_msgs/msg/pose_array.hpp>
@@ -67,7 +69,9 @@ using Msg_MarkerArray = visualization_msgs::MarkerArray;
 #include <rclcpp/clock.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/time_source.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <tf2_msgs/msg/tf_message.hpp>
 #include <visualization_msgs/msg/marker_array.hpp>
 
 #include "wrapper/publisher_wrapper.h"
@@ -87,6 +91,7 @@ using Msg_MapMetaData = nav_msgs::msg::MapMetaData;
 using Msg_Bool = std_msgs::msg::Bool;
 using Msg_TFMessage = tf2_msgs::msg::TFMessage;
 using Msg_MarkerArray = visualization_msgs::msg::MarkerArray;
+using Msg_CameraInfo = sensor_msgs::msg::CameraInfo;
 #endif
 
 namespace mvsim_node
@@ -160,9 +165,6 @@ class MVSimNode
 
 	int publisher_history_len_ = 50;
 
-	//!< (Default=0.1) Time tolerance for published TFs
-	double transform_tolerance_ = 0.1;
-
    protected:
 	mvsim_node::shared_ptr<mvsim::Server> mvsim_server_;
 
@@ -181,16 +183,27 @@ class MVSimNode
 	rclcpp::Clock::SharedPtr clock_;
 #endif
 
+	struct WorldPubs
+	{
+#if PACKAGE_ROS_VERSION == 1
+		/// used for simul_map publication
+		mvsim_node::shared_ptr<ros::Publisher> pub_map_ros;	 //!< Publisher of "simul_map" topic
+		mvsim_node::shared_ptr<ros::Publisher>
+			pub_map_metadata;  //!< Publisher of "simul_map_metadata" topic
+#else
+		/// used for simul_map publication
+		rclcpp::Publisher<Msg_OccupancyGrid>::SharedPtr pub_map_ros;
+		rclcpp::Publisher<Msg_MapMetaData>::SharedPtr pub_map_metadata;
+#endif
+	};
+
+	WorldPubs worldPubs_;
+
 	struct TPubSubPerVehicle
 	{
 #if PACKAGE_ROS_VERSION == 1
 		mvsim_node::shared_ptr<ros::Subscriber>
 			sub_cmd_vel;  //!< Subscribers vehicle's "cmd_vel" topic
-
-		/// used for simul_map publication
-		mvsim_node::shared_ptr<ros::Publisher> pub_map_ros;	 //!< Publisher of "simul_map" topic
-		mvsim_node::shared_ptr<ros::Publisher>
-			pub_map_metadata;  //!< Publisher of "simul_map_metadata" topic
 
 		mvsim_node::shared_ptr<ros::Publisher> pub_odom;  //!< Publisher of "odom" topic
 		mvsim_node::shared_ptr<ros::Publisher>
@@ -215,10 +228,6 @@ class MVSimNode
 #else
 		/// Subscribers vehicle's "cmd_vel" topic
 		rclcpp::Subscription<Msg_Twist>::SharedPtr sub_cmd_vel;
-
-		/// used for simul_map publication
-		rclcpp::Publisher<Msg_OccupancyGrid>::SharedPtr pub_map_ros;
-		rclcpp::Publisher<Msg_MapMetaData>::SharedPtr pub_map_metadata;
 
 		/// Publisher of "odom" topic
 		rclcpp::Publisher<Msg_Odometry>::SharedPtr pub_odom;
@@ -293,6 +302,9 @@ class MVSimNode
 
 	mrpt::system::CTicTac tim_publish_tf_;
 
+	/// If true, vehicle namespaces will be used even if there is only one vehicle:
+	bool force_publish_vehicle_namespace_ = false;
+
 	/// Minimum period between update of live info & read of teleop key
 	/// strokes in GUI (In ms)
 	double period_ms_teleop_refresh_ = 100;
@@ -324,7 +336,7 @@ class MVSimNode
 
 	mrpt::system::CTimeLogger profiler_{true /*enabled*/, "mvsim_node"};
 
-	void publishWorldElements(mvsim::WorldElementBase& obj, TPubSubPerVehicle& pubsubs);
+	void publishWorldElements(mvsim::WorldElementBase& obj);
 	void publishVehicles(mvsim::VehicleBase& veh);
 
 	void internalOn(const mvsim::VehicleBase& veh, const mrpt::obs::CObservation2DRangeScan& obs);
@@ -332,5 +344,6 @@ class MVSimNode
 	void internalOn(const mvsim::VehicleBase& veh, const mrpt::obs::CObservation3DRangeScan& obs);
 	void internalOn(const mvsim::VehicleBase& veh, const mrpt::obs::CObservationPointCloud& obs);
 	void internalOn(const mvsim::VehicleBase& veh, const mrpt::obs::CObservationIMU& obs);
+	void internalOn(const mvsim::VehicleBase& veh, const mrpt::obs::CObservationGPS& obs);
 
 };	// end class
