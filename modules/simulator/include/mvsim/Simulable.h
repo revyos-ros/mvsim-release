@@ -24,6 +24,7 @@ class Client;
 class World;
 class VisualObject;
 
+/** \ingroup mvsim_simulator_module */
 struct ParseSimulableParams
 {
 	ParseSimulableParams() = default;
@@ -31,6 +32,10 @@ struct ParseSimulableParams
 	bool init_pose_mandatory = true;
 };
 
+/** The basic virtual base class for all objects that can run in the simulated mvsim::World
+ *
+ * \ingroup virtual_interfaces_module
+ */
 class Simulable
 {
    public:
@@ -124,6 +129,16 @@ class Simulable
 	const World* getSimulableWorldObject() const { return simulable_parent_; }
 
 	virtual void freeOpenGLResources() {}
+
+	/** If the given world-frame 2D coordinates are within the limits of this entity,
+	 *  this method returns the ground height or elevation or "z" coordinate of the object
+	 *  for the queried (x,y). If the coordinates do not affect this object, it will return nullopt.
+	 */
+	virtual std::optional<float> getElevationAt(
+		[[maybe_unused]] const mrpt::math::TPoint2D& worldXY) const
+	{
+		return std::nullopt;
+	}
 
    protected:
 	/** User-supplied name of the vehicle (e.g. "r1", "veh1") */
