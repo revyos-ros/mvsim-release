@@ -649,15 +649,14 @@ void World::internal_GUI_thread()
 		gui_.gui_win->performLayout();
 		auto& cam = gui_.gui_win->camera();
 
-		cam.setCameraPointing(0.0f, .0f, .0f);
 		cam.setCameraProjective(!guiOptions_.ortho);
 		cam.setZoomDistance(guiOptions_.camera_distance);
 		cam.setAzimuthDegrees(guiOptions_.camera_azimuth_deg);
 		cam.setElevationDegrees(guiOptions_.camera_elevation_deg);
 		cam.setCameraFOV(guiOptions_.fov_deg);
-		cam.setCameraPointing(
-			guiOptions_.camera_point_to.x, guiOptions_.camera_point_to.y,
-			guiOptions_.camera_point_to.z);
+
+		const auto p = this->worldRenderOffset() + guiOptions_.camera_point_to;
+		cam.setCameraPointing(p.x, p.y, p.z);
 
 		const auto& lo = lightOptions_;
 
@@ -853,11 +852,19 @@ void World::GUI::handle_mouse_operations()
 	// intersection:
 	if (inters.getPoint(clickedPt))
 	{
-		// Move object to the position picked by the user:
-		// vp->getByClass<CDisk>(0)->setLocation(clickedPt);
+		// Apply world offset:
+		// P_GL = P_REAL + Off
+		// P_REAL = P_GL - Off
+		const auto dp = parent_.worldRenderOffset();
+		clickedPt.x -= dp.x;
+		clickedPt.y -= dp.y;
+		clickedPt.z -= dp.z;
+
+		// Find out the "z": get first elevation if many exist.
+		const auto zs = parent_.getElevationsAt(mrpt::math::TPoint2Df(clickedPt.x, clickedPt.y));
+		if (!zs.empty()) clickedPt.z = *zs.begin();
 	}
 
-#if MRPT_VERSION >= 0x211
 	const auto screen = gui_win->screen();
 	const bool leftClick = screen->mouseState() == 0x01;
 
@@ -887,7 +894,6 @@ void World::GUI::handle_mouse_operations()
 			btnReplaceObject->setPushed(false);
 		}
 	}
-#endif
 
 	MRPT_END
 }
@@ -982,8 +988,9 @@ void World::internalUpdate3DSceneObjects(
 	{
 		if (auto it = vehicles_.find(guiOptions_.follow_vehicle); it != vehicles_.end())
 		{
-			const mrpt::poses::CPose2D pose = it->second->getCPose2D();
-			gui_.gui_win->camera().setCameraPointing(pose.x(), pose.y(), 0.0f);
+			const auto pose = it->second->getCPose3D();
+			const auto p = applyWorldRenderOffset(pose);
+			gui_.gui_win->camera().setCameraPointing(p.x(), p.y(), p.z());
 		}
 		else
 		{
