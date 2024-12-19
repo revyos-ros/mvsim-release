@@ -37,6 +37,7 @@
 #include <sensor_msgs/Image.h>
 #include <sensor_msgs/Imu.h>
 #include <sensor_msgs/LaserScan.h>
+#include <sensor_msgs/NavSatFix.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 
@@ -48,6 +49,7 @@ using Msg_Header = std_msgs::Header;
 using Msg_Pose = geometry_msgs::Pose;
 using Msg_TransformStamped = geometry_msgs::TransformStamped;
 
+using Msg_GPS = sensor_msgs::NavSatFix;
 using Msg_Image = sensor_msgs::Image;
 using Msg_Imu = sensor_msgs::Imu;
 using Msg_LaserScan = sensor_msgs::LaserScan;
@@ -68,6 +70,7 @@ using Msg_Marker = visualization_msgs::Marker;
 #include <sensor_msgs/msg/image.hpp>
 #include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
+#include <sensor_msgs/msg/nav_sat_fix.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 
 // see: https://github.com/ros2/geometry2/pull/416
@@ -77,6 +80,8 @@ using Msg_Marker = visualization_msgs::Marker;
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #endif
 
+#include <tf2_ros/qos.hpp>	// DynamicBroadcasterQoS(), etc.
+
 // usings:
 using rclcpp::ok;
 
@@ -85,6 +90,7 @@ using Msg_Header = std_msgs::msg::Header;
 using Msg_Pose = geometry_msgs::msg::Pose;
 using Msg_TransformStamped = geometry_msgs::msg::TransformStamped;
 
+using Msg_GPS = sensor_msgs::msg::NavSatFix;
 using Msg_Image = sensor_msgs::msg::Image;
 using Msg_Imu = sensor_msgs::msg::Imu;
 using Msg_LaserScan = sensor_msgs::msg::LaserScan;
@@ -135,6 +141,9 @@ MVSimNode::MVSimNode(rclcpp::Node::SharedPtr& n)
 	localn_.param("headless", headless_, headless_);
 	localn_.param("period_ms_publish_tf", period_ms_publish_tf_, period_ms_publish_tf_);
 	localn_.param("do_fake_localization", do_fake_localization_, do_fake_localization_);
+	localn_.param(
+		"force_publish_vehicle_namespace", force_publish_vehicle_namespace_,
+		force_publish_vehicle_namespace_);
 
 	// JLBC: At present, mvsim does not use sim_time for neither ROS 1 nor
 	// ROS 2.
@@ -172,6 +181,9 @@ MVSimNode::MVSimNode(rclcpp::Node::SharedPtr& n)
 
 	publisher_history_len_ =
 		n_->declare_parameter<int>("publisher_history_len", publisher_history_len_);
+
+	force_publish_vehicle_namespace_ = n_->declare_parameter<bool>(
+		"force_publish_vehicle_namespace", force_publish_vehicle_namespace_);
 
 	// n_->declare_parameter("use_sim_time"); // already declared error?
 	if (true == n_->get_parameter_or("use_sim_time", false))
@@ -457,23 +469,13 @@ void MVSimNode::publishVehicles([[maybe_unused]] mvsim::VehicleBase& veh)
 
 // Visitor: World elements
 // ----------------------------------------
-void MVSimNode::publishWorldElements(mvsim::WorldElementBase& obj, TPubSubPerVehicle& pubsubs)
+void MVSimNode::publishWorldElements(mvsim::WorldElementBase& obj)
 {
 	// GridMaps --------------
-	static mrpt::system::CTicTac lastMapPublished;
-	if (mvsim::OccupancyGridMap* grid = dynamic_cast<mvsim::OccupancyGridMap*>(&obj);
-		grid && lastMapPublished.Tac() > 2.0)
+	if (mvsim::OccupancyGridMap* grid = dynamic_cast<mvsim::OccupancyGridMap*>(&obj); grid)
 	{
-		lastMapPublished.Tic();
-
-		static Msg_OccupancyGrid ros_map;
-		static mvsim::OccupancyGridMap* cachedGrid = nullptr;
-
-		if (cachedGrid != grid)
-		{
-			cachedGrid = grid;
-			mrpt2ros::toROS(grid->getOccGrid(), ros_map);
-		}
+		Msg_OccupancyGrid ros_map;
+		mrpt2ros::toROS(grid->getOccGrid(), ros_map);
 
 #if PACKAGE_ROS_VERSION == 1
 		static size_t loop_count = 0;
@@ -483,8 +485,8 @@ void MVSimNode::publishWorldElements(mvsim::WorldElementBase& obj, TPubSubPerVeh
 #endif
 		ros_map.header.stamp = myNow();
 
-		pubsubs.pub_map_ros->publish(ros_map);
-		pubsubs.pub_map_metadata->publish(ros_map.info);
+		worldPubs_.pub_map_ros->publish(ros_map);
+		worldPubs_.pub_map_metadata->publish(ros_map.info);
 
 	}  // end gridmap
 
@@ -509,20 +511,28 @@ void MVSimNode::notifyROSWorldIsUpdated()
 		auto& pubsubs = pubsub_vehicles_[idx];
 
 		initPubSubs(pubsubs, veh);
-
-#if PACKAGE_ROS_VERSION == 2
-		// In ROS1 latching works so we only need to do this once, here.
-		// In ROS2,latching doesn't work, we must re-publish on a regular basis...
-		static mrpt::system::CTicTac lastMapPublished;
-		if (lastMapPublished.Tac() > 2.0)
-		{
-			lastMapPublished.Tic();
-
-			mvsim_world_->runVisitorOnWorldElements([this, &pubsubs](mvsim::WorldElementBase& obj)
-													{ publishWorldElements(obj, pubsubs); });
-		}
-#endif
 	}
+
+#if PACKAGE_ROS_VERSION == 1
+	// pub: simul_map, simul_map_metadata
+	worldPubs_.pub_map_ros = mvsim_node::make_shared<ros::Publisher>(
+		n_.advertise<Msg_OccupancyGrid>("simul_map", 1 /*queue len*/, true /*latch*/));
+	worldPubs_.pub_map_metadata = mvsim_node::make_shared<ros::Publisher>(
+		n_.advertise<Msg_MapMetaData>("simul_map_metadata", 1 /*queue len*/, true /*latch*/));
+#else
+	// pub: <VEH>/simul_map, <VEH>/simul_map_metadata
+	// REP-2003: https://ros.org/reps/rep-2003.html
+	// Maps:  reliable transient-local
+	auto qosLatched = rclcpp::QoS(rclcpp::KeepLast(1)).transient_local().reliable();
+
+	worldPubs_.pub_map_ros = n_->create_publisher<Msg_OccupancyGrid>("simul_map", qosLatched);
+	worldPubs_.pub_map_metadata =
+		n_->create_publisher<Msg_MapMetaData>("simul_map_metadata", qosLatched);
+#endif
+
+	// Publish maps and static stuff:
+	mvsim_world_->runVisitorOnWorldElements([this](mvsim::WorldElementBase& obj)
+											{ publishWorldElements(obj); });
 }
 
 ros_Time MVSimNode::myNow() const
@@ -559,13 +569,6 @@ void MVSimNode::initPubSubs(TPubSubPerVehicle& pubsubs, mvsim::VehicleBase* veh)
 #endif
 
 #if PACKAGE_ROS_VERSION == 1
-	// pub: <VEH>/simul_map, <VEH>/simul_map_metadata
-	pubsubs.pub_map_ros = mvsim_node::make_shared<ros::Publisher>(n_.advertise<Msg_OccupancyGrid>(
-		vehVarName("simul_map", *veh), 1 /*queue len*/, true /*latch*/));
-	pubsubs.pub_map_metadata =
-		mvsim_node::make_shared<ros::Publisher>(n_.advertise<Msg_MapMetaData>(
-			vehVarName("simul_map_metadata", *veh), 1 /*queue len*/, true /*latch*/));
-
 	// pub: <VEH>/odom
 	pubsubs.pub_odom = mvsim_node::make_shared<ros::Publisher>(
 		n_.advertise<Msg_Odometry>(vehVarName("odom", *veh), publisher_history_len_));
@@ -584,15 +587,6 @@ void MVSimNode::initPubSubs(TPubSubPerVehicle& pubsubs, mvsim::VehicleBase* veh)
 	pubsubs.pub_tf_static = mvsim_node::make_shared<ros::Publisher>(
 		n_.advertise<Msg_TFMessage>(vehVarName("tf_static", *veh), publisher_history_len_));
 #else
-	// pub: <VEH>/simul_map, <VEH>/simul_map_metadata
-	rclcpp::QoS qosLatched(rclcpp::KeepLast(10));
-	qosLatched.durability(rmw_qos_durability_policy_t::RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL);
-
-	pubsubs.pub_map_ros =
-		n_->create_publisher<Msg_OccupancyGrid>(vehVarName("simul_map", *veh), qosLatched);
-	pubsubs.pub_map_metadata =
-		n_->create_publisher<Msg_MapMetaData>(vehVarName("simul_map_metadata", *veh), qosLatched);
-
 	// pub: <VEH>/odom
 	pubsubs.pub_odom =
 		n_->create_publisher<Msg_Odometry>(vehVarName("odom", *veh), publisher_history_len_);
@@ -606,12 +600,12 @@ void MVSimNode::initPubSubs(TPubSubPerVehicle& pubsubs, mvsim::VehicleBase* veh)
 		n_->create_publisher<Msg_Bool>(vehVarName("collision", *veh), publisher_history_len_);
 
 	// pub: <VEH>/tf, <VEH>/tf_static
-	rclcpp::QoS qosLatched10(rclcpp::KeepLast(10));
-	qosLatched10.durability(rmw_qos_durability_policy_t::RMW_QOS_POLICY_DURABILITY_TRANSIENT_LOCAL);
+	const auto qos = tf2_ros::DynamicBroadcasterQoS();
+	const auto qos_static = tf2_ros::StaticBroadcasterQoS();
 
-	pubsubs.pub_tf = n_->create_publisher<Msg_TFMessage>(vehVarName("tf", *veh), qosLatched10);
+	pubsubs.pub_tf = n_->create_publisher<Msg_TFMessage>(vehVarName("tf", *veh), qos);
 	pubsubs.pub_tf_static =
-		n_->create_publisher<Msg_TFMessage>(vehVarName("tf_static", *veh), qosLatched10);
+		n_->create_publisher<Msg_TFMessage>(vehVarName("tf_static", *veh), qos_static);
 #endif
 
 	// pub: <VEH>/chassis_markers
@@ -804,17 +798,6 @@ void MVSimNode::spinNotifyROS()
 		// MRPT_TODO("Publish /clock for ROS2 too?");
 #endif
 
-#if PACKAGE_ROS_VERSION == 2
-	// In ROS2,latching doesn't work, we must re-publish on a regular basis...
-	for (size_t idx = 0; idx < vehs.size(); ++idx)
-	{
-		auto& pubs = pubsub_vehicles_[idx];
-
-		mvsim_world_->runVisitorOnWorldElements([this, &pubs](mvsim::WorldElementBase& obj)
-												{ publishWorldElements(obj, pubs); });
-	}
-#endif
-
 	// Publish all TFs for each vehicle:
 	// ---------------------------------------------------------------------
 	if (tim_publish_tf_.Tac() > period_ms_publish_tf_ * 1e-3)
@@ -1003,6 +986,10 @@ void MVSimNode::onNewObservation(
 	{
 		internalOn(veh, *oIMU);
 	}
+	else if (const auto* oGPS = dynamic_cast<const mrpt::obs::CObservationGPS*>(obs.get()); oGPS)
+	{
+		internalOn(veh, *oGPS);
+	}
 	else
 	{
 		// Don't know how to emit this observation to ROS!
@@ -1017,7 +1004,7 @@ void MVSimNode::onNewObservation(
  * vehicle in the World, or "/<VAR_NAME>" otherwise. */
 std::string MVSimNode::vehVarName(const std::string& sVarName, const mvsim::VehicleBase& veh) const
 {
-	if (mvsim_world_->getListOfVehicles().size() == 1)
+	if (mvsim_world_->getListOfVehicles().size() == 1 && !force_publish_vehicle_namespace_)
 	{
 		return sVarName;
 	}
@@ -1115,7 +1102,6 @@ void MVSimNode::internalOn(const mvsim::VehicleBase& veh, const mrpt::obs::CObse
 	{
 		// Convert observation MRPT -> ROS
 		Msg_Imu msg_imu;
-		Msg_Pose msg_pose_imu;
 		Msg_Header msg_header;
 		// Force usage of simulation time:
 		msg_header.stamp = myNow();
@@ -1125,8 +1111,14 @@ void MVSimNode::internalOn(const mvsim::VehicleBase& veh, const mrpt::obs::CObse
 	}
 }
 
-void MVSimNode::internalOn(const mvsim::VehicleBase& veh, const mrpt::obs::CObservationImage& obs)
+void MVSimNode::internalOn(const mvsim::VehicleBase& veh, const mrpt::obs::CObservationGPS& obs)
 {
+	if (!obs.has_GGA_datum())
+	{
+		ROS12_WARN_THROTTLE(5.0, "Ignoring GPS observation without GGA field (!)");
+		return;
+	}
+
 	auto lck = mrpt::lockHelper(pubsub_vehicles_mtx_);
 	auto& pubs = pubsub_vehicles_[veh.getVehicleIndex()];
 
@@ -1138,10 +1130,151 @@ void MVSimNode::internalOn(const mvsim::VehicleBase& veh, const mrpt::obs::CObse
 	{
 #if PACKAGE_ROS_VERSION == 1
 		pub = mvsim_node::make_shared<ros::Publisher>(
-			n_.advertise<Msg_Image>(vehVarName(obs.sensorLabel, veh), publisher_history_len_));
+			n_.advertise<Msg_GPS>(vehVarName(obs.sensorLabel, veh), publisher_history_len_));
 #else
-		pub = mvsim_node::make_shared<PublisherWrapper<Msg_Image>>(
+		pub = mvsim_node::make_shared<PublisherWrapper<Msg_GPS>>(
 			n_, vehVarName(obs.sensorLabel, veh), publisher_history_len_);
+#endif
+	}
+	lck.unlock();
+
+	// Send TF:
+	mrpt::poses::CPose3D sensorPose = obs.sensorPose;
+	auto transform = mrpt2ros::toROS_tfTransform(sensorPose);
+
+	Msg_TransformStamped tfStmp;
+	tfStmp.transform = tf2::toMsg(transform);
+	tfStmp.header.frame_id = "base_link";
+	tfStmp.child_frame_id = obs.sensorLabel;
+	tfStmp.header.stamp = myNow();
+
+	Msg_TFMessage tfMsg;
+	tfMsg.transforms.push_back(tfStmp);
+	pubs.pub_tf->publish(tfMsg);
+
+	// Send observation:
+	{
+		// Convert observation MRPT -> ROS
+		auto msg = mvsim_node::make_shared<Msg_GPS>();
+		msg->header.stamp = myNow();
+		msg->header.frame_id = obs.sensorLabel;
+
+		const auto& o = obs.getMsgByClass<mrpt::obs::gnss::Message_NMEA_GGA>();
+
+		msg->latitude = o.fields.latitude_degrees;
+		msg->longitude = o.fields.longitude_degrees;
+		msg->altitude = o.fields.altitude_meters;
+
+		if (auto& c = obs.covariance_enu; c.has_value())
+		{
+#if PACKAGE_ROS_VERSION == 1
+			msg->position_covariance_type = sensor_msgs::NavSatFix::COVARIANCE_TYPE_DIAGONAL_KNOWN;
+#else
+			msg->position_covariance_type =
+				sensor_msgs::msg::NavSatFix::COVARIANCE_TYPE_DIAGONAL_KNOWN;
+#endif
+
+			msg->position_covariance.fill(0.0);
+			msg->position_covariance[0] = (*c)(0, 0);
+			msg->position_covariance[4] = (*c)(1, 1);
+			msg->position_covariance[8] = (*c)(2, 2);
+		}
+
+		pub->publish(msg);
+	}
+}
+
+namespace
+{
+/** Fills all CameraInfo fields from an MRPT calibration struct.
+ *  Header must be filled in by caller.
+ */
+Msg_CameraInfo camInfoToRos(const mrpt::img::TCamera& c)
+{
+	Msg_CameraInfo ci;
+	ci.height = c.nrows;
+	ci.width = c.ncols;
+
+#if PACKAGE_ROS_VERSION == 1
+	auto& dist = ci.D;
+	auto& K = ci.K;
+	auto& P = ci.P;
+#else
+	auto& dist = ci.d;
+	auto& K = ci.k;
+	auto& P = ci.p;
+#endif
+
+	switch (c.distortion)
+	{
+		case mrpt::img::DistortionModel::kannala_brandt:
+			ci.distortion_model = "kannala_brandt";
+			dist.resize(4);
+			dist[0] = c.k1();
+			dist[1] = c.k2();
+			dist[2] = c.k3();
+			dist[3] = c.k4();
+			break;
+
+		case mrpt::img::DistortionModel::plumb_bob:
+			ci.distortion_model = "plumb_bob";
+			dist.resize(5);
+			for (size_t i = 0; i < dist.size(); i++) dist[i] = c.dist[i];
+			break;
+
+		case mrpt::img::DistortionModel::none:
+			ci.distortion_model = "plumb_bob";
+			dist.resize(5);
+			for (size_t i = 0; i < dist.size(); i++) dist[i] = 0;
+			break;
+
+		default:
+			THROW_EXCEPTION("Unexpected distortion model!");
+	}
+
+	K.fill(0);
+	K[0] = c.fx();
+	K[4] = c.fy();
+	K[2] = c.cx();
+	K[5] = c.cy();
+	K[8] = 1.0;
+
+	P.fill(0);
+	P[0] = 1;
+	P[5] = 1;
+	P[10] = 1;
+
+	return ci;
+}
+}  // namespace
+
+void MVSimNode::internalOn(const mvsim::VehicleBase& veh, const mrpt::obs::CObservationImage& obs)
+{
+	using namespace std::string_literals;
+
+	auto lck = mrpt::lockHelper(pubsub_vehicles_mtx_);
+	auto& pubs = pubsub_vehicles_[veh.getVehicleIndex()];
+
+	const std::string img_topic = obs.sensorLabel + "/image_raw"s;
+	const std::string camInfo_topic = obs.sensorLabel + "/camera_info"s;
+
+	// Create the publisher the first time an observation arrives:
+	const bool is_1st_pub = pubs.pub_sensors.find(img_topic) == pubs.pub_sensors.end();
+	auto& pubImg = pubs.pub_sensors[img_topic];
+	auto& pubCamInfo = pubs.pub_sensors[camInfo_topic];
+
+	if (is_1st_pub)
+	{
+#if PACKAGE_ROS_VERSION == 1
+		pubImg = mvsim_node::make_shared<ros::Publisher>(
+			n_.advertise<Msg_Image>(vehVarName(img_topic, veh), publisher_history_len_));
+		pubCamInfo = mvsim_node::make_shared<ros::Publisher>(
+			n_.advertise<Msg_CameraInfo>(vehVarName(camInfo_topic, veh), publisher_history_len_));
+#else
+		pubImg = mvsim_node::make_shared<PublisherWrapper<Msg_Image>>(
+			n_, vehVarName(img_topic, veh), publisher_history_len_);
+		pubCamInfo = mvsim_node::make_shared<PublisherWrapper<Msg_CameraInfo>>(
+			n_, vehVarName(camInfo_topic, veh), publisher_history_len_);
 #endif
 	}
 	lck.unlock();
@@ -1162,14 +1295,21 @@ void MVSimNode::internalOn(const mvsim::VehicleBase& veh, const mrpt::obs::CObse
 	pubs.pub_tf->publish(tfMsg);
 
 	// Send observation:
+	Msg_Header msg_header;
+	msg_header.stamp = myNow();
+	msg_header.frame_id = obs.sensorLabel;
+
 	{
 		// Convert observation MRPT -> ROS
 		Msg_Image msg_img;
-		Msg_Header msg_header;
-		msg_header.stamp = myNow();
-		msg_header.frame_id = obs.sensorLabel;
 		msg_img = mrpt2ros::toROS(obs.image, msg_header);
-		pub->publish(mvsim_node::make_shared<Msg_Image>(msg_img));
+		pubImg->publish(mvsim_node::make_shared<Msg_Image>(msg_img));
+	}
+	// Send CameraInfo
+	{
+		Msg_CameraInfo camInfo = camInfoToRos(obs.cameraParams);
+		camInfo.header = msg_header;
+		pubCamInfo->publish(mvsim_node::make_shared<Msg_CameraInfo>(camInfo));
 	}
 }
 
