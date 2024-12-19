@@ -174,19 +174,22 @@ void LaserScanner::internalGuiUpdate(
 		gui_uptodate_ = true;
 	}
 
-	const mrpt::poses::CPose2D& p = vehicle_.getCPose2D();
+	const mrpt::poses::CPose3D p = vehicle_.getCPose3D();
+	const auto pp = parent()->applyWorldRenderOffset(p);
+
 	const double z_incrs = 1e-3;  // for z_order_
 	const double z_offset = 1e-3;
 
 	if (gl_scan_)
-		gl_scan_->setPose(
-			mrpt::poses::CPose3D(p.x(), p.y(), z_offset + z_incrs * z_order_, p.phi(), 0.0, 0.0));
+	{
+		auto p2 = pp;
+		p2.z_incr(z_offset + z_incrs * z_order_);
+		gl_scan_->setPose(p2);
+	}
 
-	if (gl_sensor_fov_) gl_sensor_fov_->setPose(p);
-
-	if (gl_sensor_origin_) gl_sensor_origin_->setPose(p);
-
-	if (glCustomVisual_) glCustomVisual_->setPose(p + scan_model_.sensorPose);
+	if (gl_sensor_fov_) gl_sensor_fov_->setPose(pp);
+	if (gl_sensor_origin_) gl_sensor_origin_->setPose(pp);
+	if (glCustomVisual_) glCustomVisual_->setPose(pp + scan_model_.sensorPose);
 }
 
 void LaserScanner::simul_pre_timestep([[maybe_unused]] const TSimulContext& context) {}
@@ -579,7 +582,7 @@ void LaserScanner::simulateOn3DScene(mrpt::opengl::COpenGLScene& world3DScene)
 		// Camera pose: vehicle + relativePoseOnVehicle:
 		// Note: relativePoseOnVehicle should be (y,p,r)=(90deg,0,90deg) to make
 		// the camera to look forward:
-		cam.setPose(depthSensorPose);
+		cam.setPose(world()->applyWorldRenderOffset(depthSensorPose));
 
 		auto tleRender =
 			mrpt::system::CTimeLoggerEntry(world_->getTimeLogger(), "sensor.2Dlidar.renderSubScan");
