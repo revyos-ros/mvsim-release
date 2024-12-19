@@ -18,6 +18,7 @@
 #include <mrpt/opengl/CSetOfLines.h>
 #include <mrpt/opengl/CSetOfObjects.h>
 #include <mrpt/poses/CPose2D.h>
+#include <mrpt/typemeta/TEnumType.h>
 #include <mvsim/ClassFactory.h>
 #include <mvsim/Sensors/SensorBase.h>
 #include <mvsim/Simulable.h>
@@ -29,7 +30,22 @@
 
 namespace mvsim
 {
+/** Geometry types for usage within the optional <geometry> XML tag of blocks \sa Block
+ * \ingroup mvsim_simulator_module
+ */
+enum class GeometryType : int32_t
+{
+	Invalid = -1,
+	// ----------------
+	Cylinder = 0,
+	Sphere,
+	Box,
+	Ramp,
+	SemiCylinderBump,
+};
+
 /** A non-vehicle "actor" for the simulation, typically obstacle blocks.
+ * \ingroup mvsim_simulator_module
  */
 class Block : public VisualObject, public Simulable
 {
@@ -121,6 +137,8 @@ class Block : public VisualObject, public Simulable
 
 	VisualObject* meAsVisualObject() override { return this; }
 
+	std::optional<float> getElevationAt(const mrpt::math::TPoint2D& worldXY) const override;
+
    protected:
 	virtual void internalGuiUpdate(
 		const mrpt::optional_ref<mrpt::opengl::COpenGLScene>& viz,
@@ -178,6 +196,31 @@ class Block : public VisualObject, public Simulable
 
 	void internal_parseGeometry(const rapidxml::xml_node<char>& xml_geom_node);
 
+	/// Params for the <geometry> XML tag:
+	struct GeometryParams
+	{
+		GeometryParams() = default;
+
+		std::string typeStr;  // cylinder, sphere, etc.
+		GeometryType type = GeometryType::Invalid;
+
+		float radius = 0;
+		float length = 0, lx = 0, ly = 0, lz = 0;
+		int vertex_count = 0;
+
+		const TParameterDefinitions params = {
+			{"type", {"%s", &typeStr}},
+			{"radius", {"%f", &radius}},
+			{"length", {"%f", &length}},
+			{"lx", {"%f", &lx}},
+			{"ly", {"%f", &ly}},
+			{"lz", {"%f", &lz}},
+			{"vertex_count", {"%i", &vertex_count}},
+		};
+	};
+
+	GeometryParams geomParams_;
+
 	mrpt::opengl::CSetOfObjects::Ptr gl_block_;
 	mrpt::opengl::CSetOfLines::Ptr gl_forces_;
 	std::mutex force_segments_for_rendering_cs_;
@@ -185,7 +228,10 @@ class Block : public VisualObject, public Simulable
 
 };	// end Block
 
-/** An invisible block which can be used as an auxiliary anchor object. */
+/** An invisible block which can be used as an auxiliary anchor object.
+ * \ingroup mvsim_simulator_module
+ *
+ */
 class DummyInvisibleBlock : public VisualObject, public Simulable
 {
    public:
@@ -245,3 +291,12 @@ class DummyInvisibleBlock : public VisualObject, public Simulable
 };	// end Block
 
 }  // namespace mvsim
+
+// TTypeEnum macros:
+MRPT_ENUM_TYPE_BEGIN_NAMESPACE(mvsim, mvsim::GeometryType)
+MRPT_FILL_ENUM_CUSTOM_NAME(GeometryType::Cylinder, "cylinder");
+MRPT_FILL_ENUM_CUSTOM_NAME(GeometryType::Sphere, "sphere");
+MRPT_FILL_ENUM_CUSTOM_NAME(GeometryType::Box, "box");
+MRPT_FILL_ENUM_CUSTOM_NAME(GeometryType::Ramp, "ramp");
+MRPT_FILL_ENUM_CUSTOM_NAME(GeometryType::SemiCylinderBump, "semi_cylinder_bump");
+MRPT_ENUM_TYPE_END()

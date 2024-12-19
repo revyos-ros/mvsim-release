@@ -53,7 +53,8 @@ void VisualObject::guiUpdate(
 	// If "viz" does not have a value, it's because we are already inside a
 	// setPose() change event, so my caller already holds the mutex and we don't
 	// need/can't acquire it again:
-	const auto objectPose = viz.has_value() ? meSim->getPose() : meSim->getPoseNoLock();
+	const auto objectPoseOrg = viz.has_value() ? meSim->getPose() : meSim->getPoseNoLock();
+	const auto objectPose = parent()->applyWorldRenderOffset(objectPoseOrg);
 
 	if (glCustomVisual_ && viz.has_value() && physical.has_value())
 	{
@@ -83,6 +84,7 @@ void VisualObject::guiUpdate(
 			const auto& cs = collisionShape_.value();
 
 			const double height = cs.zMax() - cs.zMin();
+			ASSERT_(height == height);
 			ASSERT_(height > 0);
 
 			const auto c = cs.getContour();
@@ -216,6 +218,7 @@ bool VisualObject::implParseVisual(const rapidxml::xml_node<char>& visNode)
 	params["show_bounding_box"] = TParamEntry("%bool", &initialShowBoundingBox);
 	params["model_cull_faces"] = TParamEntry("%s", &opts.modelCull);
 	params["model_color"] = TParamEntry("%color", &opts.modelColor);
+	params["model_split_size"] = TParamEntry("%f", &opts.splitSize);
 	params["name"] = TParamEntry("%s", &objectName);
 
 	// Parse XML params:
