@@ -26,6 +26,7 @@
 #include <mvsim/Wheel.h>
 #include <mvsim/basic_types.h>
 
+#include <atomic>
 #include <map>
 #include <mutex>
 #include <string>
@@ -37,6 +38,8 @@ namespace mvsim
 /** Virtual base class for each vehicle "actor" in the simulation.
  * Derived classes implements different dynamical models (Differential,
  * Ackermann,...)
+ *
+ *  \ingroup virtual_interfaces_module
  */
 class VehicleBase : public VisualObject, public Simulable
 {
@@ -134,6 +137,9 @@ class VehicleBase : public VisualObject, public Simulable
 	}
 	void chassisAndWheelsVisible(bool visible);
 
+	double chassisZMin() const { return chassis_z_min_; }
+	double chassisZMax() const { return chassis_z_max_; }
+
    protected:
 	std::map<std::string, std::shared_ptr<CSVLogger>> loggers_;
 	std::string log_path_;
@@ -213,25 +219,26 @@ class VehicleBase : public VisualObject, public Simulable
 	std::vector<mrpt::opengl::CSetOfObjects::Ptr> glWheelsViz_, glWheelsPhysical_;
 	mrpt::opengl::CSetOfLines::Ptr glForces_;
 	mrpt::opengl::CSetOfLines::Ptr glMotorTorques_;
+	std::atomic_bool glInit_ = false;
 
 	std::vector<mrpt::math::TSegment3D> forceSegmentsForRendering_;
 	std::vector<mrpt::math::TSegment3D> torqueSegmentsForRendering_;
 	std::mutex forceSegmentsForRenderingMtx_;
 
    public:	// data logger header entries
-	static constexpr char DL_TIMESTAMP[] = "timestamp";
+	static constexpr char DL_TIMESTAMP[] = "Timestamp";
 	static constexpr char LOGGER_POSE[] = "logger_pose";
 	static constexpr char LOGGER_WHEEL[] = "logger_wheel";
 
-	static constexpr char PL_Q_X[] = "Qx";
-	static constexpr char PL_Q_Y[] = "Qy";
-	static constexpr char PL_Q_Z[] = "Qz";
-	static constexpr char PL_Q_YAW[] = "Qyaw";
-	static constexpr char PL_Q_PITCH[] = "Qpitch";
-	static constexpr char PL_Q_ROLL[] = "Qroll";
-	static constexpr char PL_DQ_X[] = "dQx";
-	static constexpr char PL_DQ_Y[] = "dQy";
-	static constexpr char PL_DQ_Z[] = "dQz";
+	static constexpr char PL_Q_X[] = "q0x";
+	static constexpr char PL_Q_Y[] = "q1y";
+	static constexpr char PL_Q_Z[] = "q2z";
+	static constexpr char PL_Q_YAW[] = "q3yaw";
+	static constexpr char PL_Q_PITCH[] = "q4pitch";
+	static constexpr char PL_Q_ROLL[] = "q5roll";
+	static constexpr char PL_DQ_X[] = "dqx";
+	static constexpr char PL_DQ_Y[] = "dqy";
+	static constexpr char PL_DQ_Z[] = "dqz";
 
 	static constexpr char WL_TORQUE[] = "torque";
 	static constexpr char WL_WEIGHT[] = "weight";
@@ -239,6 +246,8 @@ class VehicleBase : public VisualObject, public Simulable
 	static constexpr char WL_VEL_Y[] = "velocity_y";
 	static constexpr char WL_FRIC_X[] = "friction_x";
 	static constexpr char WL_FRIC_Y[] = "friction_y";
+
+	bool isLogging() const;
 };	// end VehicleBase
 
 // Class factory:

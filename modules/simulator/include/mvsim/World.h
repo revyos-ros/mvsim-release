@@ -24,6 +24,7 @@
 #include <mrpt/system/COutputLogger.h>
 #include <mrpt/system/CTicTac.h>
 #include <mrpt/system/CTimeLogger.h>
+#include <mrpt/topography/data_types.h>
 #include <mvsim/Block.h>
 #include <mvsim/Comms/Client.h>
 #include <mvsim/Joystick.h>
@@ -35,6 +36,8 @@
 #include <functional>
 #include <list>
 #include <map>
+#include <set>
+#include <unordered_map>
 
 #if MVSIM_HAS_ZMQ && MVSIM_HAS_PROTOBUF
 // forward declarations:
@@ -53,6 +56,17 @@ class SrvShutdownAnswer;
 
 namespace mvsim
 {
+/** \defgroup mvsim_simulator_module mvsim-simulator
+ *   The main module: vehicles, sensors, world objects, etc.
+ */
+
+/** \mainpage MVSim
+ * This is the Doxygen-based C++ API documentation.
+ * Use the links above to browse existing classes.
+ *
+ * Main documentation and tutorials live here: https://mvsimulator.readthedocs.io/
+ */
+
 /** Simulation happens inside a World object.
  * This is the central class for usage from user code, running the simulation,
  * loading XML models, managing GUI visualization, etc.
@@ -60,6 +74,7 @@ namespace mvsim
  *
  * See: https://mvsimulator.readthedocs.io/en/latest/world.html
  *
+ * \ingroup mvsim_simulator_module
  */
 class World : public mrpt::system::COutputLogger
 {
@@ -382,6 +397,19 @@ class World : public mrpt::system::COutputLogger
 
 	float collisionThreshold() const { return collisionThreshold_; }
 
+	/** Returns the list of "z" coordinate or "elevations" for all simulable objects at a given
+	 *  world-frame 2D coordinates (x,y). If no object reports any height, the value "0.0" will be
+	 * always reported by default. In multistorey worlds, for example, this will return the height
+	 * of each floor for the queried point.
+	 */
+	std::set<float> getElevationsAt(const mrpt::math::TPoint2D& worldXY) const;
+
+	/// with query points the center of a wheel, this returns the highest "ground" under it, or .0
+	/// if nothing found.
+	float getHighestElevationUnder(const mrpt::math::TPoint3Df& queryPt) const;
+
+	void internal_simul_pre_step_terrain_elevation();
+
    private:
 	friend class VehicleBase;
 	friend class Block;
@@ -423,6 +451,9 @@ class World : public mrpt::system::COutputLogger
 
 	double ground_truth_rate_ = 50.0;  //!< In Hz.
 
+	double max_slope_to_collide_ = 0.30;
+	double min_slope_to_collide_ = -0.50;
+
 	const TParameterDefinitions otherWorldParams_ = {
 		{"server_address", {"%s", &serverAddress_}},
 		{"gravity", {"%lf", &gravity_}},
@@ -435,6 +466,8 @@ class World : public mrpt::system::COutputLogger
 		{"rawlog_odometry_rate", {"%lf", &rawlog_odometry_rate_}},
 		{"save_ground_truth_trajectory", {"%s", &save_ground_truth_trajectory_}},
 		{"ground_truth_rate", {"%lf", &ground_truth_rate_}},
+		{"max_slope_to_collide", {"%lf", &max_slope_to_collide_}},
+		{"min_slope_to_collide", {"%lf", &min_slope_to_collide_}},
 	};
 
 	/** User-defined variables as defined via `<variable name='' value='' />`
@@ -548,6 +581,63 @@ class World : public mrpt::system::COutputLogger
 	/** Options for lights */
 	LightOptions lightOptions_;
 
+   public:
+	// Options for simulating GNSS (GPS) sensors.
+	struct GeoreferenceOptions
+	{
+		GeoreferenceOptions() = default;
+
+		void parse_from(const rapidxml::xml_node<char>& node, COutputLogger& logger);
+
+		/// Latitude/longitude/height of the world (0,0,0) frame.
+		mrpt::topography::TGeodeticCoords georefCoord;
+
+		/** Optional world rotation (in radians, in degrees in the XML file)
+		 *  wrt ENU frame: 0 (default) means +X points East.
+		 */
+		double world_to_enu_rotation = .0;
+
+		const TParameterDefinitions params = {
+			{"latitude", {"%lf", &georefCoord.lat.decimal_value}},
+			{"longitude", {"%lf", &georefCoord.lon.decimal_value}},
+			{"height", {"%lf", &georefCoord.height}},
+			{"world_to_enu_rotation_deg", {"%lf_deg", &world_to_enu_rotation}},
+		};
+	};
+
+	const GeoreferenceOptions& georeferenceOptions() const { return georeferenceOptions_; }
+
+	/// (See docs for worldRenderOffset_)
+	mrpt::math::TVector3D worldRenderOffset() const
+	{
+		return worldRenderOffset_ ? *worldRenderOffset_ : mrpt::math::TVector3D(0, 0, 0);
+	}
+	mrpt::math::TPose3D applyWorldRenderOffset(mrpt::math::TPose3D p) const
+	{
+		const auto t = worldRenderOffset();
+		p.x += t.x;
+		p.y += t.y;
+		p.z += t.z;
+		return p;
+	}
+	mrpt::poses::CPose3D applyWorldRenderOffset(mrpt::poses::CPose3D p) const
+	{
+		const auto t = worldRenderOffset();
+		p.x_incr(t.x);
+		p.y_incr(t.y);
+		p.z_incr(t.z);
+		return p;
+	}
+	/// (See docs for worldRenderOffset_)
+	void worldRenderOffsetPropose(const mrpt::math::TVector3D& v)
+	{
+		if (!worldRenderOffset_) worldRenderOffset_ = v;
+	}
+
+   private:
+	/** Options for lights */
+	GeoreferenceOptions georeferenceOptions_;
+
 	// -------- World contents ----------
 	/** Mutex protecting simulation objects from multi-thread access */
 	std::recursive_mutex world_cs_;
@@ -574,6 +664,51 @@ class World : public mrpt::system::COutputLogger
 	void internal_one_timestep(double dt);
 
 	std::mutex simulationStepRunningMtx_;
+
+	// A 2D-hash table of objects
+	struct lut_2d_coordinates_t
+	{
+		int32_t x, y;
+
+		bool operator==(const lut_2d_coordinates_t& o) const noexcept
+		{
+			return (x == o.x && y == o.y);
+		}
+	};
+
+	static lut_2d_coordinates_t xy_to_lut_coords(const mrpt::math::TPoint2Df& p);
+
+	struct LutIndexHash
+	{
+		std::size_t operator()(const lut_2d_coordinates_t& p) const noexcept
+		{
+			// These are the implicit assumptions of the reinterpret cast below:
+			static_assert(sizeof(int32_t) == sizeof(uint32_t));
+			static_assert(offsetof(lut_2d_coordinates_t, x) == 0 * sizeof(uint32_t));
+			static_assert(offsetof(lut_2d_coordinates_t, y) == 1 * sizeof(uint32_t));
+
+			const uint32_t* vec = reinterpret_cast<const uint32_t*>(&p);
+			return ((1 << 20) - 1) & (vec[0] * 73856093 ^ vec[1] * 19349663);
+		}
+		/// k1 < k2? for std::map containers
+		bool operator()(
+			const lut_2d_coordinates_t& k1, const lut_2d_coordinates_t& k2) const noexcept
+		{
+			if (k1.x != k2.x) return k1.x < k2.x;
+			return k1.y < k2.y;
+		}
+	};
+
+	using LUTCache =
+		std::unordered_map<lut_2d_coordinates_t, std::vector<Simulable::Ptr>, LutIndexHash>;
+
+	/// Ensure the cache is built and up-to-date, then return it:
+	const LUTCache& getLUTCacheOfObjects() const;
+
+	mutable LUTCache lut2d_objects_;
+	mutable bool lut2d_objects_is_up_to_date_ = false;
+
+	void internal_update_lut_cache() const;
 
 	/** GUI stuff  */
 	struct GUI
@@ -622,6 +757,13 @@ class World : public mrpt::system::COutputLogger
 	 */
 	mrpt::opengl::COpenGLScene worldPhysical_;
 	std::recursive_mutex worldPhysicalMtx_;
+
+	/// World coordinates offset for rendering. Useful mainly to keep numerical accuracy
+	/// in the OpenGL pipeline (using "floats") when using UTM world coordinates.
+	/// All coordinates to be send to OpenGL must **add** this number.
+	/// It is automatically set via calling worldRenderOffsetPropose()
+	/// and must be retrieved via worldRenderOffset()
+	std::optional<mrpt::math::TVector3D> worldRenderOffset_;
 
 	/// Updated in internal_one_step()
 	std::map<std::string, mrpt::math::TPose3D> copy_of_objects_dynstate_pose_;
@@ -696,11 +838,13 @@ class World : public mrpt::system::COutputLogger
 	void parse_tag_block_class(const XmlParserContext& ctx);
 	void parse_tag_gui(const XmlParserContext& ctx);
 	void parse_tag_lights(const XmlParserContext& ctx);
+	void parse_tag_georeference(const XmlParserContext& ctx);
 	void parse_tag_walls(const XmlParserContext& ctx);
 	void parse_tag_include(const XmlParserContext& ctx);
 	void parse_tag_variable(const XmlParserContext& ctx);
 	void parse_tag_for(const XmlParserContext& ctx);
 	void parse_tag_if(const XmlParserContext& ctx);
+	void parse_tag_marker(const XmlParserContext& ctx);
 
 	// ======== end of XML parser tags ========
 
@@ -718,6 +862,29 @@ class World : public mrpt::system::COutputLogger
 	std::mutex gt_io_mtx_;
 	std::map<std::string, std::fstream> gt_io_per_veh_;
 	std::optional<double> gt_last_time_;
+
+	// ============ Elevation Field Collision artifacts ==============
+	struct TFixturePtr
+	{
+		TFixturePtr() = default;
+		b2Fixture* fixture = nullptr;
+	};
+	struct TInfoPerCollidableobj
+	{
+		TInfoPerCollidableobj() = default;
+
+		mrpt::poses::CPose3D pose;
+		b2Body* collide_body = nullptr;
+		double representativeHeight = 0.01;
+		double maxWorkableStepHeight = 0.10;
+		double speed = .0;
+		mrpt::math::TPolygon2D contour;
+		const std::vector<float>* wheel_heights = nullptr;
+		std::vector<float> contour_heights;
+		std::vector<TFixturePtr> collide_fixtures;
+	};
+	std::vector<std::optional<TInfoPerCollidableobj>> obstacles_for_each_obj_;
+	// ============ end of elevation field collision =================
 
 	// Services:
 	void internal_advertiseServices();	// called from connectToServer()
