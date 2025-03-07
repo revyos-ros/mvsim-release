@@ -2,6 +2,39 @@
 Changelog for package mvsim
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+0.13.2 (2025-02-05)
+-------------------
+* FIX: another missing if() protecting access to uninitialized js data
+* Contributors: Jose Luis Blanco Claraco, Jose Luis Blanco-Claraco
+
+0.13.1 (2025-02-04)
+-------------------
+* Merge pull request `#65 <https://github.com/MRPT/mvsim/issues/65>`_ from MRPT/fix/no-joystick-crash
+  BUGFIX: Crash due to access uninitialized memory when no joystick is …
+* BUGFIX: Crash due to access uninitialized memory when no joystick is found
+* Merge pull request `#64 <https://github.com/MRPT/mvsim/issues/64>`_ from MRPT/feature/new-dem-param
+  New offset parameters for DEM XYZRGB files
+* New offset parameters for DEM XYZRGB files
+* greenhouse demo world: add ROS 1 launch file too
+* version.h
+* Contributors: Jose Luis Blanco-Claraco
+
+0.13.0 (2024-12-24)
+-------------------
+* Add ROS1 generic launcher
+* Port demos to the generic ros2 launch file so all rosargs are now exposed in all demos
+* create generic launch_world ros2 file
+* ROS node: new param "publish_tf_odom2baselink"
+* ROS2 warehouse demo launch: add use_rviz argument
+* Update README.md: Mark ROS2 Iron as EOL
+* Readme: remove obsolete ROS1 wiki link
+* ElevationMap from XML: Ensure trimmed input string in kernel
+* Alternative reference method for UTM world coordinates
+* Implement world georeferenciation via UTM zone number
+* Fix targets order for prev commit
+* Fix build without ZMQ
+* Contributors: Jose Luis Blanco-Claraco
+
 0.12.1 (2024-12-04)
 -------------------
 * Merge pull request `#58 <https://github.com/MRPT/mvsim/issues/58>`_ from MichaelGrupp/fix-navsatfix-ros1
